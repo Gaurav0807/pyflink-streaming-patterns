@@ -1,11 +1,15 @@
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.common.execution_mode import ExecutionMode
 
 
 env = StreamExecutionEnvironment.get_execution_environment()
 
+# By default Flink chains adjacent operators into one task for performance,
+# which collapses the whole pipeline into a single box in the Flink UI.
+# Disabling it shows each operator as its own node in the job graph.
+env.disable_operator_chaining()
 
-#Create a stream
+
+# --- Source ---
 data = env.from_collection([
     "apple",
     "banana",
@@ -14,14 +18,14 @@ data = env.from_collection([
     "banana"
 ])
 
+# --- Map ---
+# transform each element: "apple" -> ("apple", 1)
+mapped = data.map(lambda x: (x, 1))
 
-#Process the stream
+# --- Filter ---
+filtered = mapped.filter(lambda x: x[0] != "banana")
 
-result = data.map(lambda x:(x,1)) \
-            .key_by(lambda x:x[0]) \
-            .reduce(lambda a,b: (a[0],a[1]+b[1]))
+# --- Sink ---
+filtered.print()
 
-
-result.print()
-
-env.execute("Simple Flink Job")
+env.execute("Flink JOb")
