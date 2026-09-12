@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "SensorEvent",
+  "namespace": "com.example.kafkaflink",
+  "fields": [
+    { "name": "sensor_id", "type": "string" },
+    { "name": "temperature", "type": "double" },
+    { "name": "humidity", "type": "double" },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" } }
+  ]
+}

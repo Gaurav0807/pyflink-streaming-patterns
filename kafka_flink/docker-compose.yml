@@ -1,0 +1,194 @@
+name: kafka-flink-local
+
+networks:
+  kafka-flink-net:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  flink-checkpoints:
+  minio-data:
+
+services:
+  # ---------------------------------------------------------------------
+  # Kafka broker (KRaft mode, no Zookeeper needed)
+  # ---------------------------------------------------------------------
+  broker:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: broker
+    container_name: broker
+    ports:
+      - "9092:9092"   # host clients (producers/consumers running on your Mac)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:29093
+      KAFKA_LISTENERS: PLAINTEXT://broker:29092,CONTROLLER://broker:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "broker:29092"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+    networks:
+      - kafka-flink-net
+
+  # ---------------------------------------------------------------------
+  # Confluent Schema Registry
+  # ---------------------------------------------------------------------
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://broker:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: _schemas
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+    networks:
+      - kafka-flink-net
+
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRASERVERS: broker:29092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks:
+      - kafka-flink-net
+
+  kafka-init-topics:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-init-topics
+    depends_on:
+      broker:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/scripts/create_topics.sh"]
+    volumes:
+      - ./scripts:/scripts
+    networks:
+      - kafka-flink-net
+
+  # ---------------------------------------------------------------------
+  # Flink JobManager (exposes Flink Web UI + REST API)
+  # ---------------------------------------------------------------------
+  jobmanager:
+    build:
+      context: ./flink
+    container_name: jobmanager
+    hostname: jobmanager
+    command: jobmanager
+    ports:
+      - "8082:8081"   # Flink Web UI -> http://localhost:8082
+    environment:
+      - AWS_ACCESS_KEY_ID=
+      - AWS_SECRET_ACCESS_KEY=
+      - AWS_SESSION_TOKEN=
+      - AWS_DEFAULT_REGION=us-east-1
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        fs.s3a.access.key: 
+        fs.s3a.secret.key: 
+        fs.s3a.session.token: 
+        fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider
+    volumes:
+      - ./flink/jobs:/opt/flink/jobs
+      - flink-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    networks:
+      - kafka-flink-net
+
+  # ---------------------------------------------------------------------
+  # Flink TaskManager (executes the actual tasks/slots)
+  # ---------------------------------------------------------------------
+  taskmanager:
+    build:
+      context: ./flink
+    container_name: taskmanager
+    hostname: taskmanager
+    command: taskmanager
+    scale: 1
+    environment:
+      - AWS_ACCESS_KEY_ID=
+      - AWS_SECRET_ACCESS_KEY=
+      - AWS_SESSION_TOKEN=
+      - AWS_DEFAULT_REGION=us-east-1
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        fs.s3a.access.key: 
+        fs.s3a.secret.key: 
+        fs.s3a.session.token: 
+        fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider
+    volumes:
+      - ./flink/jobs:/opt/flink/jobs
+      - flink-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      - jobmanager
+    networks:
+      - kafka-flink-net
+
+  # ---------------------------------------------------------------------
+  # MinIO (S3-compatible object storage)
+  # ---------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    ports:
+      - "9000:9000"   # MinIO API
+      - "9001:9001"   # MinIO Console (Web UI)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kafka-flink-net
