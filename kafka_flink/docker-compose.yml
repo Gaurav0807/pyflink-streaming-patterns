@@ -6,7 +6,6 @@ networks:
 
 volumes:
   kafka-data:
-  flink-checkpoints:
   minio-data:
 
 services:
@@ -70,7 +69,9 @@ services:
     networks:
       - kafka-flink-net
 
-
+  # ---------------------------------------------------------------------
+  # Kafka UI (topics, messages, consumer groups, schema registry browser)
+  # ---------------------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -89,6 +90,7 @@ services:
       DYNAMIC_CONFIG_ENABLED: "true"
     networks:
       - kafka-flink-net
+
 
   kafka-init-topics:
     image: confluentinc/cp-kafka:7.6.1
@@ -122,13 +124,16 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.checkpoints.num-retained: 5
+        state.savepoints.dir: file:///opt/flink/savepoints
         fs.s3a.access.key: 
         fs.s3a.secret.key: 
         fs.s3a.session.token: 
         fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider
     volumes:
       - ./flink/jobs:/opt/flink/jobs
-      - flink-checkpoints:/opt/flink/checkpoints
+      - ./flink/checkpoints:/opt/flink/checkpoints
+      - ./flink/savepoints:/opt/flink/savepoints
     depends_on:
       broker:
         condition: service_healthy
@@ -157,13 +162,16 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 4
         state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.checkpoints.num-retained: 5
+        state.savepoints.dir: file:///opt/flink/savepoints
         fs.s3a.access.key: 
         fs.s3a.secret.key: 
         fs.s3a.session.token: 
         fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider
     volumes:
       - ./flink/jobs:/opt/flink/jobs
-      - flink-checkpoints:/opt/flink/checkpoints
+      - ./flink/checkpoints:/opt/flink/checkpoints
+      - ./flink/savepoints:/opt/flink/savepoints
     depends_on:
       - jobmanager
     networks:

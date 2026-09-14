@@ -1,25 +1,63 @@
 """
-Sample PyFlink streaming job:
 
-    input-events (Kafka, Avro/Schema Registry)
-        -> transform (C -> F, threshold classification)
-        -> output-events (Kafka, Avro/Schema Registry)
-
-Submit with the cluster running (see README.md):
-
-    docker exec -it jobmanager ./bin/flink run -py /opt/flink/jobs/kafka_pyflink_job.py
+docker exec -it jobmanager ./bin/flink run -py /opt/flink/jobs/kafka_pyflink_job.py
 
 Watch it in the Flink Web UI at http://localhost:8082
 """
-from pyflink.table import EnvironmentSettings, TableEnvironment
+from pyflink.table import EnvironmentSettings, TableEnvironment, StreamTableEnvironment
+from pyflink.datastream import (
+    StreamExecutionEnvironment,
+    CheckpointingMode,
+    ExternalizedCheckpointCleanup,
+)
+
 
 KAFKA_BOOTSTRAP_SERVERS = "broker:29092"
 SCHEMA_REGISTRY_URL = "http://schema-registry:8081"
 
 
+#   'earliest-offset' - read the entire topic from the beginning
+#   'latest-offset'   - skip all existing data, only see new messages from now on
+#   'timestamp'       - start at the first message at/after SCAN_STARTUP_TIMESTAMP_MILLIS
+SCAN_STARTUP_MODE = "earliest-offset"
+SCAN_STARTUP_TIMESTAMP_MILLIS = 1789236113617  # only used when SCAN_STARTUP_MODE == 'timestamp'
+
+
 def main():
-    env_settings = EnvironmentSettings.in_streaming_mode()
-    t_env = TableEnvironment.create(env_settings)
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.disable_operator_chaining()
+
+    # Take a consistent snapshot (Kafka offsets + any operator state) every
+    # 10s. On failure, Flink resumes from the last one instead of restarting
+    # from scan.startup.mode.
+    env.enable_checkpointing(10000)  # interval in ms
+
+    checkpoint_config = env.get_checkpoint_config()
+    checkpoint_config.set_checkpointing_mode(CheckpointingMode.EXACTLY_ONCE)
+    checkpoint_config.set_checkpoint_timeout(60000)  # fail a stuck checkpoint after 60s
+    checkpoint_config.set_min_pause_between_checkpoints(5000)  # breathing room between attempts
+    checkpoint_config.set_max_concurrent_checkpoints(1)
+    # Without this, cancelling the job deletes its checkpoints -- this keeps
+    # the last one so a manually-stopped job can still be resumed from it.
+    checkpoint_config.enable_externalized_checkpoints(
+        ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION
+    )
+    # state.checkpoints.dir is already set globally in docker-compose.yml
+    # (file:///opt/flink/checkpoints), so no need to repeat it here.
+
+    # env_settings = EnvironmentSettings.in_streaming_mode()
+    # t_env = TableEnvironment.create(env_settings)
+
+    t_env = StreamTableEnvironment.create(env)
+    # state.checkpoints.num-retained is NOT a per-job setting -- Flink reads it
+    # from the JobManager process's own flink-conf.yaml, not from anything
+    # shipped with the JobGraph. It's set once, cluster-wide, in
+    # docker-compose.yml alongside state.checkpoints.dir.
+
+
+    startup_option = f"'scan.startup.mode' = '{SCAN_STARTUP_MODE}'"
+    if SCAN_STARTUP_MODE == "timestamp":
+        startup_option += f",\n            'scan.startup.timestamp-millis' = '{SCAN_STARTUP_TIMESTAMP_MILLIS}'"
 
     t_env.execute_sql(f"""
         CREATE TABLE input_events (
@@ -33,7 +71,7 @@ def main():
             'topic' = 'input-events',
             'properties.bootstrap.servers' = '{KAFKA_BOOTSTRAP_SERVERS}',
             'properties.group.id' = 'pyflink-sensor-consumer',
-            'scan.startup.mode' = 'earliest-offset',
+            {startup_option},
             'format' = 'avro-confluent',
             'avro-confluent.url' = '{SCHEMA_REGISTRY_URL}'
         )

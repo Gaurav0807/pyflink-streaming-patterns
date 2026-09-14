@@ -80,3 +80,11 @@ Temporary credentials expire — regenerate and repeat the step above when you s
 
 
 
+### SCAN_STARTUP_MODE:
+
+-  `earliest-offset` — reads the whole topic from the start (what it was already doing).
+- `latest-offset` — ignores everything already in the topic, only sees new messages produced after the job starts.
+-  `timestamp` — starts at the first message at or after SCAN_STARTUP_TIMESTAMP_MILLIS. Set that to a real millisecond timestamp (e.g. int(time.time() * 1000) for "from now", or a specific past moment).
+
+
+![Flink UI](./kafka_flink/img/Flink_startup_time.png)
