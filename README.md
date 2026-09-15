@@ -88,3 +88,12 @@ Temporary credentials expire — regenerate and repeat the step above when you s
 
 
 ![Flink UI](./kafka_flink/img/Flink_startup_time.png)
+
+
+
+### Stateful vs Stateless Processing in Flink
+
+![Flink UI](./kafka_flink/img/statefull_vs_stateless.png)
+
+
+
